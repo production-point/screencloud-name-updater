@@ -14,33 +14,48 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static("public"));
 
-const { WEBHOOK_URL, API_KEY, PORT = 3000 } = process.env;
+// 🔧 Sanitize & validate env vars (trailing spaces/newlines are a common culprit)
+const WEBHOOK_URL = (process.env.WEBHOOK_URL || "").trim();
+const API_KEY = (process.env.API_KEY || "").trim();
+const PORT = process.env.PORT || 3000;
+
 if (!WEBHOOK_URL || !API_KEY) {
   console.error("Missing WEBHOOK_URL or API_KEY in environment.");
   process.exit(1);
 }
 
-// --- simple persistence for “last pushed” name ---
+// Log masked config at startup (helps catch wrong region/UUID instantly)
+try {
+  const u = new URL(WEBHOOK_URL);
+  const maskedPath =
+    u.pathname.length > 14 ? `${u.pathname.slice(0, 14)}…` : u.pathname;
+  console.log(
+    `[webhook] host=${u.host} path=${maskedPath} keyLen=${API_KEY.length}`
+  );
+} catch {
+  console.warn("WEBHOOK_URL is not a valid URL");
+}
+
+// --- simple persistence of last pushed name (ephemeral across redeploys) ---
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_PATH = process.env.DATA_PATH || path.join(__dirname, "data", "state.json");
-
 let state = { lastName: null, updatedAt: null };
 
 async function loadState() {
-  try {
-    const txt = await fs.readFile(DATA_PATH, "utf8");
-    state = JSON.parse(txt);
-  } catch (_) {
-    // first run or file missing; ignore
-  }
+  try { state = JSON.parse(await fs.readFile(DATA_PATH, "utf8")); } catch {}
 }
 async function saveState() {
   await fs.mkdir(path.dirname(DATA_PATH), { recursive: true });
   await fs.writeFile(DATA_PATH, JSON.stringify(state), "utf8");
 }
 
-// --- API: submit a new name (push to ScreenCloud, then cache locally) ---
+// 💥 Stronger error surfacing + axios timeout
+const axiosCfg = {
+  headers: { "X-API-Key": API_KEY, "Content-Type": "application/json" },
+  timeout: 10000
+};
+
 app.post("/submit-name", async (req, res) => {
   try {
     const name = (req.body.name || "").trim().slice(0, 120);
@@ -51,36 +66,67 @@ app.post("/submit-name", async (req, res) => {
         {
           content: {
             title: { content: `Welcome, ${name}!` },
-            body: { content: `Say hi to ${name} 👋` }
+            body:  { content: `Say hi to ${name} 👋` }
           }
         }
       ]
     };
 
-    const headers = { "X-API-Key": API_KEY, "Content-Type": "application/json" };
-    const { data } = await axios.post(WEBHOOK_URL, payload, { headers });
+    const r = await axios.post(WEBHOOK_URL, payload, axiosCfg);
 
-    // update local state after a successful push
     state.lastName = name;
     state.updatedAt = new Date().toISOString();
     await saveState();
 
-    return res.json({ ok: true, data });
+    return res.json({ ok: true, status: r.status, data: r.data });
   } catch (err) {
-    console.error(err?.response?.data || err.message);
-    return res.status(500).json({ ok: false, error: "Failed to post to ScreenCloud Webhooks." });
+    const status = err?.response?.status || 500;
+    const details = err?.response?.data || err.message;
+    console.error("Webhook error:", status, details);
+    return res.status(status).json({ ok: false, error: "Failed to post to ScreenCloud Webhooks.", status, details });
   }
 });
 
-// --- API: get current (last pushed) name ---
 app.get("/current", (_req, res) => {
   res.json({ lastName: state.lastName, updatedAt: state.updatedAt });
 });
 
-// Health check
+// 🔎 Diagnostics (does NOT reveal secrets)
+app.get("/diag", (_req, res) => {
+  let host = null, path = null, valid = true;
+  try { const u = new URL(WEBHOOK_URL); host = u.host; path = u.pathname; } catch { valid = false; }
+  res.json({
+    ok: true,
+    webhook: { host, pathLength: path ? path.length : 0, valid },
+    apiKey: { length: API_KEY.length },
+  });
+});
+
+// ▶️ Self-test: posts a known payload via the same code path
+app.post("/self-test", async (_req, res) => {
+  try {
+    const payload = {
+      items: [
+        {
+          content: {
+            title: { content: "Railway self-test" },
+            body:  { content: "If you see this on screen, the app is wired correctly." }
+          }
+        }
+      ]
+    };
+    const r = await axios.post(WEBHOOK_URL, payload, axiosCfg);
+    return res.json({ ok: true, status: r.status, data: r.data });
+  } catch (err) {
+    const status = err?.response?.status || 500;
+    const details = err?.response?.data || err.message;
+    console.error("Self-test error:", status, details);
+    return res.status(status).json({ ok: false, error: "Self-test failed.", status, details });
+  }
+});
+
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-// start server after loading cached state
 loadState().finally(() => {
   app.listen(PORT, () => console.log(`App running on http://localhost:${PORT}`));
 });

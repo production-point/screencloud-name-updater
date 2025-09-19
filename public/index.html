@@ -92,5 +92,36 @@
     // NEW: show current name on page load
     refreshCurrent();
   </script>
+
+<details style="margin-top:14px">
+  <summary>Diagnostics</summary>
+  <div id="diagOut" style="margin:8px 0 10px; font-family:ui-monospace, SFMono-Regular, Menlo, monospace;"></div>
+  <button id="btnSelfTest" type="button">Run self-test</button>
+  <div id="selfTestOut" class="status" style="margin-top:8px"></div>
+</details>
+
+<script>
+  async function loadDiag() {
+    try {
+      const res = await fetch("/diag");
+      const j = await res.json();
+      document.getElementById("diagOut").textContent = JSON.stringify(j, null, 2);
+    } catch (e) {
+      document.getElementById("diagOut").textContent = "Diag failed.";
+    }
+  }
+  document.getElementById("btnSelfTest").addEventListener("click", async () => {
+    const out = document.getElementById("selfTestOut");
+    out.textContent = "Running…";
+    try {
+      const res = await fetch("/self-test", { method: "POST" });
+      const j = await res.json();
+      out.textContent = j.ok ? `OK (status ${j.status})` : `Failed: ${j.status} ${JSON.stringify(j.details || j.error)}`;
+    } catch { out.textContent = "Request failed."; }
+  });
+  loadDiag();
+</script>
+
+
 </body>
 </html>
