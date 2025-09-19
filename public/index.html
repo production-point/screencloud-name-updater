@@ -15,12 +15,23 @@
     button{ padding:12px 16px; border-radius:12px; border:0; background:#22c55e; color:#052e14; cursor:pointer; font-weight:600; }
     .status{ margin-top:12px; min-height:1.2em; font-size:.95rem;}
     .ok { color:#34d399; } .err { color:#fca5a5; }
+    /* NEW: current display */
+    .current { margin:12px 0 18px; padding:10px 12px; background:#0b1220; border:1px solid #334155; border-radius:12px; color:#cbd5e1; }
+    .current strong { color:#e5e7eb; }
+    .muted { color:#94a3b8; font-size:.9rem; }
   </style>
 </head>
 <body>
   <div class="card">
     <h1>Push a name to ScreenCloud</h1>
     <p>Type a name and press submit. Your ScreenCloud Webhooks slide will update instantly.</p>
+
+    <!-- NEW: current state block -->
+    <div class="current">
+      <div>Currently showing: <strong id="currentName">—</strong></div>
+      <div class="muted" id="updatedAt"></div>
+    </div>
+
     <form id="nameForm">
       <input id="name" type="text" name="name" placeholder="e.g., Alex Johnson" autocomplete="off" required />
       <button type="submit">Submit</button>
@@ -31,6 +42,26 @@
   <script>
     const form = document.getElementById("nameForm");
     const statusEl = document.getElementById("status");
+    const currentNameEl = document.getElementById("currentName");
+    const updatedAtEl = document.getElementById("updatedAt");
+
+    async function refreshCurrent() {
+      try {
+        const res = await fetch("/current");
+        if (!res.ok) throw new Error();
+        const json = await res.json();
+        if (json?.lastName) {
+          currentNameEl.textContent = json.lastName;
+          updatedAtEl.textContent = `updated ${new Date(json.updatedAt).toLocaleString()}`;
+        } else {
+          currentNameEl.textContent = "—";
+          updatedAtEl.textContent = "";
+        }
+      } catch {
+        currentNameEl.textContent = "—";
+        updatedAtEl.textContent = "";
+      }
+    }
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -47,15 +78,19 @@
           statusEl.textContent = "Updated!";
           statusEl.className = "status ok";
           form.reset();
+          refreshCurrent(); // NEW: reflect the latest name immediately
         } else {
           statusEl.textContent = json.error || "Something went wrong.";
           statusEl.className = "status err";
         }
-      } catch (err) {
+      } catch {
         statusEl.textContent = "Network error.";
         statusEl.className = "status err";
       }
     });
+
+    // NEW: show current name on page load
+    refreshCurrent();
   </script>
 </body>
 </html>
